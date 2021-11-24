@@ -151,6 +151,9 @@ pacf(tsReturn_8k, lag.max = 1000)
 # Split test train ####
 train <- btc[1:(0.9*nrow(btc)),]
 test <- btc[(0.9*nrow(btc)+1):nrow(btc),]
+tsReturn_s24_train <- window(tsReturn_s24, start=1, end=750)
+tsReturn_s24_test <- window(tsReturn_s24, start=751)
+
 
 # Modeling ####
 # seems like partial autocorrelation decreases at around 500 days - try this
@@ -189,11 +192,12 @@ fc
 # After 11/19 Office Hour ####
 # adjust for 24-hour seasonality
 # close
-tsClose_s24 <- diff(tsClose, lag=24)
+tsClose_s24 <- ts(btc$close, frequency=24)
 ts.plot(tsClose_s24)
-ts.plot(tsClose)
+tsOpen_s24 <- ts(btc$open, frequency=24)
+ts.plot(tsOpen_s24)
 acf(tsClose_s24)
-pacf(tsClose_s24, lag.max = 100)
+pacf(tsClose_s24, lag.max = 1000, ylim=c(-0.03,0.03))
 
 adf_test <- adf.test(tsClose_s24, alternative = 'stationary')
 print(adf_test)
@@ -201,29 +205,33 @@ print(adf_test)
 kpss_test <- kpss.test(tsClose_s24)
 print(kpss_test)
 
-# close s24 diff 1
-tsClose_s24_d1 <- diff(tsClose_s24, lag=1)
-ts.plot(tsClose_s24_d1)
-acf(tsClose_s24_d1)
-pacf(tsClose_s24_d1, lag.max = 1000)
-
 # return
-# use diff in tsReturn here
-tsOpen_s24 <- diff(ts(btc$open), lag=24)
-tsReturn_s24 <- tsClose_s24 - tsOpen_s24
-
-tsReturn <- tsClose - ts(btc$open)
-tsReturn_s24 <- diff(tsReturn, lag=24)
+tsReturn_s24 <- (tsClose_s24 - tsOpen_s24) / tsOpen_s24
+tsReturn_s24_2 <- ts(((btc$close - btc$open) / btc$open), frequency=24)
 ts.plot(tsReturn_s24)
+ts.plot(tsReturn_s24_2)
 acf(tsReturn_s24, ylim=c(-0.2,0.2))
-pacf(tsReturn_s24, ylim=c(-0.03,0.03))
+pacf(tsReturn_s24, lag.max=1000)
 
-Arima(tsReturn, order=c(1,1,0), seasonal=c(1,1,0))
+adf_test <- adf.test(tsReturn_s24_2, alternative = 'stationary')
+print(adf_test)
+
+kpss_test <- kpss.test(tsReturn_s24_2)
+print(kpss_test)
+
+fit <- Arima(tsReturn_s24_train, order=c(2,0,2), seasonal=c(1,0,0))
+fit_test <- Arima(tsReturn_s24_test, model=fit)
+fitted(fit_test)
+window(tsReturn_s24, start=751)
+autoplot(tsReturn_s24) + autolayer(fitted(fit_test)) + xlim(c(751,780)) + ylim(c(-0.01,0.01))
+
 auto.arima(tsReturn_s24)
+# ARIMA(2,0,2)(0,0,2)[24] with non-zero mean
+auto.arima(tsReturn_s24[3:(nrow(btc)-20)], xreg=xreg[3:(nrow(btc)-20),1:3], seasonal=c(0,0,2))
+
 
 
 # Chunk for Friday 11/19 Office Hour ####
-
 # return
 tsReturn <- ts(btc$return)
 ts.plot(tsReturn) # it's certainly messy
