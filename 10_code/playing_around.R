@@ -1,6 +1,10 @@
 library(tseries)
 library(forecast)
+library(MLmetrics)
+library(astsa)
 library(ggplot2)
+library(progress)
+
 
 btc <- read.csv("~/GitHub/ids702_modeling/Final Project/20_intermediate_files/btc_prices_social_cleaned.csv")
 
@@ -148,11 +152,7 @@ pacf(tsReturn_8k, lag.max = 1000)
 
 
 
-# Split test train ####
-train <- btc[1:(0.9*nrow(btc)),]
-test <- btc[(0.9*nrow(btc)+1):nrow(btc),]
-tsReturn_s24_train <- window(tsReturn_s24, start=1, end=750)
-tsReturn_s24_test <- window(tsReturn_s24, start=751)
+
 
 
 # Modeling ####
@@ -171,7 +171,6 @@ xreg = cbind(reddit_active_users = stats::lag(ts(btc[,"reddit_active_users"]),-1
              reddit_posts_per_hour = stats::lag(ts(btc[,"reddit_posts_per_hour"]),-1),
              reddit_comments_per_hour=stats::lag(ts(btc[,"reddit_comments_per_hour"]),-1)
              )
-             open = ts(btc$open))
 
 xreg = cbind(reddit_posts_per_hour = stats::lag(ts(btc[,"reddit_posts_per_hour"]),-1),
              reddit_posts_per_hour_l2 = stats::lag(ts(btc[,"reddit_posts_per_hour"]),-2))
@@ -190,6 +189,81 @@ fc
 
 
 # After 11/19 Office Hour ####
+## one-step-ahead forecast ####
+pb <- progress_bar$new(
+  format = "[:bar] :percent eta: :eta",
+  total = 100, clear = TRUE, width= 80)
+one_step_ahead_arima <- function(data, ahead, st, ed){
+  len <- ahead
+  results = matrix(ncol = 2, nrow = len)
+  for (i in 1:len){
+    pb$tick()
+    start_cal = (st + c(0,i))
+    end_cal = (ed + c(0,i))
+    training_observed = window(data, start = start_cal, end = end_cal, frequency = 24)
+    
+    fit <- Arima(training_observed, order=c(2,0,2), seasonal=c(0,0,2))
+    
+    demandforecast = forecast(fit,1)$mean[1]
+    observed = window(data, start=(end_cal + c(0,1)), end=(end_cal + c(0,1)))
+    
+    results[i,1]= observed
+    results[i,2]= demandforecast
+  }
+  return(results)
+}
+
+
+one_step_ahead_sarima <- function(data, validation) {
+  len <- length(validation)
+  results = matrix(ncol = 2, nrow = len)
+  for (i in 1:len){
+    training_observed = window(data, start = c(1,1), end = c(832,(23+i)), frequency = 24)
+    
+    forecasted.sarima = sarima.for(training_observed, n.ahead = 1,
+                                   p=2,d=0,q=2,P=0,D=0,Q=2,S=24)
+    
+    demandforecast = forecasted.sarima$pred
+    observed = validation[[i]]
+    
+    results[i,1]= observed
+    results[i,2]= demandforecast
+  }
+  return(results)
+}
+
+
+## Validation functions for return ####
+directional_acc <- function(fitted, test) {
+  same_dir <- fitted * test
+  pct = sum(same_dir > 0)
+  return(pct / length(same_dir))
+}
+
+best_return <- function(actual_return, cash) {
+  for (i in actual_return) {
+    if (i > 0) {
+      cash <- cash * (1+i)
+    }
+  }
+  return(cash)
+}
+
+strategy_return <- function(actual_return, fitted, cash) {
+  for (i in 1:length(actual_return)) {
+    if (fitted[i] > 0) {
+      cash <- cash * (1 + actual_return[i])
+    }
+  }
+  return(cash)
+}
+
+strategy_loss <- function(actual_return, fitted, cash) {
+  return(strategy_return(actual_return, fitted, cash) / best_return(actual_return, cash))
+}
+
+
+
 # adjust for 24-hour seasonality
 # close
 tsClose_s24 <- ts(btc$close, frequency=24)
@@ -205,12 +279,12 @@ print(adf_test)
 kpss_test <- kpss.test(tsClose_s24)
 print(kpss_test)
 
-# return
+## return ####
 tsReturn_s24 <- (tsClose_s24 - tsOpen_s24) / tsOpen_s24
 tsReturn_s24_2 <- ts(((btc$close - btc$open) / btc$open), frequency=24)
 ts.plot(tsReturn_s24)
 ts.plot(tsReturn_s24_2)
-acf(tsReturn_s24, ylim=c(-0.2,0.2))
+acf(tsReturn_s24, ylim=c(-0.2,0.2), lag.max=1000)
 pacf(tsReturn_s24, lag.max=1000)
 
 adf_test <- adf.test(tsReturn_s24_2, alternative = 'stationary')
@@ -219,15 +293,51 @@ print(adf_test)
 kpss_test <- kpss.test(tsReturn_s24_2)
 print(kpss_test)
 
-fit <- Arima(tsReturn_s24_train, order=c(2,0,2), seasonal=c(1,0,0))
+### Split test train ####
+train <- btc[1:(0.9*nrow(btc)),]
+test <- btc[(0.9*nrow(btc)+1):nrow(btc),]
+tsReturn_s24_train <- window(tsReturn_s24, start=c(1,1), end=c(832,24))
+tsReturn_s24_test <- window(tsReturn_s24, start=c(833,1))
+
+
+
+
+## Modeling ####
+# ARIMA
+fit <- Arima(tsReturn_s24_train, order=c(2,0,2), seasonal=c(0,0,2))
 fit_test <- Arima(tsReturn_s24_test, model=fit)
 fitted(fit_test)
 window(tsReturn_s24, start=751)
-autoplot(tsReturn_s24) + autolayer(fitted(fit_test)) + xlim(c(751,780)) + ylim(c(-0.01,0.01))
+autoplot(tsReturn_s24) + autolayer(fitted(fit_test)) + xlim(c(830,834)) + ylim(c(-0.01,0.01))
+# validation
+MAPE(fitted(fit_test), tsReturn_s24_test)
+directional_acc(fitted(fit_test), tsReturn_s24_test)
+
 
 auto.arima(tsReturn_s24)
 # ARIMA(2,0,2)(0,0,2)[24] with non-zero mean
 auto.arima(tsReturn_s24[3:(nrow(btc)-20)], xreg=xreg[3:(nrow(btc)-20),1:3], seasonal=c(0,0,2))
+
+## forecast using asta
+sarima_forecast_asta = sarima.for(tsReturn_s24_train, n.ahead = length(tsReturn_s24_test),
+                             p=2,d=0,q=2,P=0,D=0,Q=2,S=24)
+autoplot(tsReturn_s24) + autolayer(sarima_forecast_asta$pred) + xlim(c(830,834)) + ylim(c(-0.01,0.01))
+
+# ETS
+ets_model = ets(tsReturn_s24_train, allow.multiplicative.trend = TRUE)
+ets_forecast = forecast(ets_model, h=length(tsReturn_s24_test))
+MAPE(ets_forecast$mean, tsReturn_s24_test) *100
+
+# TBATS
+tbats_model = tbats(tsReturn_s24_train)
+tbats_forecast = forecast(tbats_model, h=length(tsReturn_s24_test))
+autoplot(tsReturn_s24) + autolayer(tbats_forecast$mean) +autolayer(fitted(fit_test)) + xlim(c(832,834)) + ylim(c(-0.013,0.013))
+MAPE(tbats_forecast$mean, tsReturn_s24_test) * 100
+
+
+
+
+
 
 
 
